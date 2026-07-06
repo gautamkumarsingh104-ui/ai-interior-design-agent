@@ -1,3 +1,4 @@
-google-genai>=1.0.0,<2.0.0
-streamlit==1.39.0
-python-dotenv>=1.0.0,<2.0.0
+# Pinned for Streamlit Community Cloud (Python 3.11) — loose ranges caused install failures.
+streamlit==1.40.1
+google-genai==1.0.0
+python-dotenv==1.0.1
