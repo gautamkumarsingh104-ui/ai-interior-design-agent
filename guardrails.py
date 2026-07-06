@@ -170,3 +170,183 @@ def no_guaranteed_language(text: str) -> bool:
         return True
     low = text.lower()
     return not any(re.search(p, low) for p in GUARANTEE_PATTERNS)
+
+
+# --- 4. Dimension conflict detection -------------------------------------
+
+_DIM_CM_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*cm\s*[x×]\s*(\d+(?:\.\d+)?)\s*cm"
+    r"(?:\s*[x×]\s*(\d+(?:\.\d+)?)\s*cm)?",
+    re.IGNORECASE,
+)
+_DIM_BARE_RE = re.compile(
+    r"(?:room|fit|space|area|size)[^\d]{0,30}(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def extract_dimensions_from_text(text: str) -> list[tuple[float, float, float | None]]:
+    """Pull L×W×H (or L×W) size mentions from free text, in cm."""
+    if not text:
+        return []
+    found: list[tuple[float, float, float | None]] = []
+    for m in _DIM_CM_RE.finditer(text):
+        l, w = float(m.group(1)), float(m.group(2))
+        h = float(m.group(3)) if m.group(3) else None
+        found.append((l, w, h))
+    for m in _DIM_BARE_RE.finditer(text):
+        l, w = float(m.group(1)), float(m.group(2))
+        found.append((l, w, None))
+    return found
+
+
+def _dims_conflict(a: float, b: float, ratio_threshold: float = 3.0) -> bool:
+    if a <= 0 or b <= 0:
+        return False
+    ratio = max(a, b) / min(a, b)
+    return ratio >= ratio_threshold
+
+
+def detect_dimension_conflict(
+    length_cm: float | None,
+    width_cm: float | None,
+    free_text: str = "",
+    constraints: str = "",
+) -> dict[str, Any]:
+    """Flag when free-text dimensions disagree with structured room fields."""
+    text = " ".join(filter(None, [free_text, constraints])).strip()
+    mentions = extract_dimensions_from_text(text)
+    if not length_cm or not width_cm or not mentions:
+        return {"conflict": False, "severe": False, "message": ""}
+
+    conflicts: list[str] = []
+    severe = False
+    for tl, tw, th in mentions:
+        len_conflict = _dims_conflict(float(length_cm), tl)
+        wid_conflict = _dims_conflict(float(width_cm), tw)
+        if not len_conflict and not wid_conflict:
+            continue
+        severe = severe or max(length_cm, width_cm) / min(tl, tw) >= 5
+        parts = []
+        if len_conflict:
+            parts.append(f"length {int(tl)}cm in your note vs {int(length_cm)}cm entered")
+        if wid_conflict:
+            parts.append(f"width {int(tw)}cm in your note vs {int(width_cm)}cm entered")
+        if th is not None:
+            parts.append(f"height {int(th)}cm mentioned in note")
+        conflicts.append(", ".join(parts))
+
+    if not conflicts:
+        return {"conflict": False, "severe": False, "message": ""}
+
+    msg = (
+        "Your note mentions different room dimensions than the form: "
+        + "; ".join(conflicts)
+        + ". Please confirm which is correct before we finalize a plan "
+        "(e.g. did you mean metres instead of centimetres?)."
+    )
+    return {"conflict": True, "severe": severe, "message": msg,
+            "structured": (length_cm, width_cm), "text_mentions": mentions}
+
+
+# --- 5. Named catalog piece resolution -----------------------------------
+
+# Generic furniture labels — never treat as a named-piece pin request.
+_GENERIC_PIECES = {
+    "sofa", "couch", "coffee table", "tv unit", "tv", "rug", "lighting", "light",
+    "lamp", "armchair", "chair", "bookshelf", "side table", "rug", "carpet",
+    "floor lamp", "table lamp", "wall art", "planter", "mirror", "curtains",
+}
+
+
+def _is_named_piece_request(chunk: str) -> bool:
+    cl = chunk.lower().strip()
+    for prefix in ("an ", "a ", "the "):
+        if cl.startswith(prefix):
+            cl = cl[len(prefix):].strip()
+    if not cl or cl in _GENERIC_PIECES:
+        return False
+    return any(b in cl for b in KNOWN_BRANDS)
+
+
+def resolve_catalog_pins(
+    must_haves: list[str] | None = None,
+    free_text: str = "",
+    constraints: str = "",
+) -> list[dict[str, Any]]:
+    """Find catalog items the customer named explicitly (e.g. Eames lounger -> ACH-001)."""
+    must_chunks: list[str] = []
+    if must_haves:
+        if isinstance(must_haves, list):
+            must_chunks = [str(x).strip() for x in must_haves if x]
+        else:
+            must_chunks = [p.strip() for p in str(must_haves).split(",") if p.strip()]
+    text = " ".join(filter(None, [free_text, constraints, ", ".join(must_chunks)])).lower()
+    if not text and not must_chunks:
+        return []
+
+    pins: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    def _add_pin(phrase: str, row: dict) -> None:
+        iid = str(row["item_id"])
+        if iid in seen_ids:
+            return
+        seen_ids.add(iid)
+        pins.append({
+            "phrase": phrase,
+            "item_id": iid,
+            "name": row["name"],
+            "category": row["category"],
+            "item": row,
+        })
+
+    # Named must-haves only (e.g. "an Eames lounger") — not generic "Sofa".
+    for chunk in must_chunks:
+        cl = chunk.lower().strip()
+        if not _is_named_piece_request(chunk):
+            continue
+        for row in db.query(
+            "SELECT * FROM catalog WHERE room_types LIKE '%Living Room%'"
+        ):
+            name = (row.get("name") or "").lower()
+            if "eames" in cl and "eames" in name:
+                _add_pin(chunk, row)
+
+    extra_phrases = sorted(
+        {p.lower().strip() for p in must_chunks if _is_named_piece_request(p)},
+        key=len, reverse=True,
+    )
+    search_terms = extra_phrases + [
+        "eames lounger", "eames lounge", "eames chair", "eames-style",
+    ]
+
+    for phrase in search_terms:
+        if phrase not in text and not any(phrase in c.lower() for c in must_chunks):
+            continue
+        rows = db.query(
+            "SELECT * FROM catalog WHERE lower(name) LIKE ? AND room_types LIKE ?",
+            (f"%{phrase}%", "%Living Room%"),
+        )
+        for row in rows:
+            _add_pin(phrase, row)
+
+    return pins
+
+
+# --- 6. Fit severity (code-level safety net) -------------------------------
+
+SEVERE_FIT_FOOTPRINT_PCT = 100.0
+
+
+def classify_fit_severity(fit_result: dict[str, Any]) -> str:
+    """ok | tight | failed | severe — severe means physically impossible set."""
+    if fit_result.get("fits"):
+        pct = fit_result.get("footprint_used_pct")
+        if pct is not None and pct > 85:
+            return "tight"
+        return "ok"
+    pct = fit_result.get("footprint_used_pct")
+    if pct is not None and pct > SEVERE_FIT_FOOTPRINT_PCT:
+        return "severe"
+    return "failed"

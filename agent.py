@@ -510,8 +510,10 @@ def _footprint(item: dict) -> float:
 
 
 def repair_budget(selection: dict[str, dict], candidates: dict[str, list[dict]],
-                  budget: float | None, trace: list, dropped: list) -> bool:
+                  budget: float | None, trace: list, dropped: list,
+                  pinned_cats: set[str] | None = None) -> bool:
     """Swap/drop until within budget. Returns True if it changed the selection."""
+    pinned = pinned_cats or set()
     if budget is None:
         return False
     changed = False
@@ -523,6 +525,8 @@ def repair_budget(selection: dict[str, dict], candidates: dict[str, list[dict]],
         # Try swapping the most expensive selected item for a cheaper candidate.
         swapped = False
         for cat in sorted(selection, key=lambda c: _price(selection[c]), reverse=True):
+            if cat in pinned:
+                continue
             current_price = _price(selection[cat])
             for cand in candidates.get(cat, []):
                 if _price(cand) < current_price:
@@ -534,7 +538,10 @@ def repair_budget(selection: dict[str, dict], candidates: dict[str, list[dict]],
         if swapped:
             changed = True
             continue
-        # Nothing left to swap: drop the least-essential piece.
+        # Nothing left to swap: drop the least-essential piece (not pinned).
+        droppable = [c for c in selection if c not in pinned]
+        if not droppable:
+            return changed
         if _drop_least_essential(selection, dropped, "budget"):
             changed = True
             continue
@@ -544,8 +551,10 @@ def repair_budget(selection: dict[str, dict], candidates: dict[str, list[dict]],
 
 def repair_fit(selection: dict[str, dict], candidates: dict[str, list[dict]],
                room_l: float | None, room_w: float | None, trace: list,
-               dropped: list, generous: bool = False, style: str = "") -> bool:
+               dropped: list, generous: bool = False, style: str = "",
+               pinned_cats: set[str] | None = None) -> bool:
     """Swap/drop until the room fits. Returns True if it changed the selection."""
+    pinned = pinned_cats or set()
     if not room_l or not room_w:
         return False
     factor = _circulation_factor(room_l, room_w, generous)
@@ -559,6 +568,8 @@ def repair_fit(selection: dict[str, dict], candidates: dict[str, list[dict]],
         # Swap the largest-footprint piece for a smaller alternative.
         swapped = False
         for cat in sorted(selection, key=lambda c: _footprint(selection[c]), reverse=True):
+            if cat in pinned:
+                continue
             current_fp = _footprint(selection[cat])
             smaller = [c for c in candidates.get(cat, [])
                        if 0 < _footprint(c) < current_fp]
@@ -578,6 +589,9 @@ def repair_fit(selection: dict[str, dict], candidates: dict[str, list[dict]],
         if swapped:
             changed = True
             continue
+        droppable = [c for c in selection if c not in pinned]
+        if not droppable:
+            return changed
         if _drop_least_essential(selection, dropped, "fit", by_footprint=True):
             changed = True
             continue
@@ -908,6 +922,128 @@ def _template_rationale(intent: dict, items: list[dict], budget_result: dict,
     return rationale, _template_trade(intent, budget_result, left_out)
 
 
+def apply_catalog_pins(selection: dict[str, dict], pins: list[dict],
+                       resolved: list[str], flags: list[str]) -> set[str]:
+    """Pin named catalog items the customer asked for. Returns pinned categories."""
+    pinned_cats: set[str] = set()
+    for pin in pins:
+        cat = pin.get("category")
+        if not cat or cat not in resolved:
+            continue
+        item = pin.get("item")
+        if not item:
+            continue
+        prev = selection.get(cat)
+        selection[cat] = item
+        pinned_cats.add(cat)
+        if prev and prev.get("item_id") != item.get("item_id"):
+            flags.append(
+                f"You asked for {pin.get('phrase', pin.get('name'))} — "
+                f"using the real catalog match {item.get('name')} ({item.get('item_id')})."
+            )
+        elif not prev:
+            flags.append(
+                f"Included your named request: {item.get('name')} ({item.get('item_id')})."
+            )
+    return pinned_cats
+
+
+def build_minimal_fitting_selection(
+    candidates: dict[str, list[dict]], resolved: list[str],
+    room_l: float, room_w: float, trace: list, generous: bool,
+) -> dict[str, dict]:
+    """Smallest single footprint piece that fits — for impossibly small rooms."""
+    factor = _circulation_factor(room_l, room_w, generous)
+    usable = float(room_l) * float(room_w) * factor
+    best: tuple[str, dict] | None = None
+    best_fp = float("inf")
+    for cat in sorted(resolved, key=category_priority):
+        for row in candidates.get(cat, []):
+            fp = _footprint(row)
+            if fp <= 0 or fp > usable:
+                continue
+            if fp < best_fp:
+                best_fp = fp
+                best = (cat, row)
+    return {best[0]: best[1]} if best else {}
+
+
+def enforce_fit_final_gate(
+    selection: dict[str, dict], candidates: dict[str, list[dict]],
+    resolved: list[str], intent: dict, dropped: list, trace: list,
+    generous: bool, budget: float | None,
+) -> tuple[dict[str, dict], dict, list[str], bool]:
+    """Hard code-level stop when fit_check says the plan cannot physically work."""
+    room_l, room_w = intent.get("length_cm"), intent.get("width_cm")
+    extra_flags: list[str] = []
+    if not room_l or not room_w:
+        fit = tools.fit_check([], room_l, room_w, trace=trace)
+        return selection, fit, extra_flags, True
+
+    circ = _circulation_factor(room_l, room_w, generous)
+
+    def _check(sel: dict) -> dict:
+        ids = [it["item_id"] for it in sel.values()]
+        return tools.fit_check(ids, room_l, room_w, trace=trace, circulation_factor=circ)
+
+    fit_result = _check(selection)
+    severity = guardrails.classify_fit_severity(fit_result)
+
+    if severity in ("ok", "tight"):
+        return selection, fit_result, extra_flags, True
+
+    # Severe (>100% footprint): never present a multi-item "successful" plan.
+    if severity == "severe":
+        l, w = int(room_l), int(room_w)
+        pct = fit_result.get("footprint_used_pct")
+        selection.clear()
+        seen_drop: set[str] = set()
+        for cat in list(resolved):
+            if cat not in seen_drop:
+                dropped.append({"category": cat, "item": None,
+                                "reason": "could not fit in the room"})
+                seen_drop.add(cat)
+        empty_fit = tools.fit_check([], room_l, room_w, trace=trace, circulation_factor=circ)
+        extra_flags.append(
+            f"This room is entered as {l}cm × {w}cm ({l * w:,} cm² of floor). "
+            f"A standard living-room set cannot fit — the furniture footprint needs "
+            f"far more space than the room has "
+            f"(~{pct:.0f}% of the floor for the pieces considered). "
+            f"Please double-check your dimensions (did you mean metres instead of centimetres?)."
+        )
+        return selection, empty_fit, extra_flags, False
+
+    # Moderate failure: try one genuinely fitting piece before giving up.
+    minimal = build_minimal_fitting_selection(
+        candidates, resolved, float(room_l), float(room_w), trace, generous)
+    if minimal:
+        min_fit = _check(minimal)
+        min_sev = guardrails.classify_fit_severity(min_fit)
+        if min_sev in ("ok", "tight"):
+            extra_flags.append(
+                "A full living-room set cannot fit these room dimensions. "
+                "Below is the smallest single catalog piece that fits, if you still "
+                "want a suggestion."
+            )
+            for cat in list(selection.keys()):
+                if cat not in minimal:
+                    dropped.append({"category": cat, "item": None,
+                                    "reason": "could not fit in the room"})
+            return minimal, min_fit, extra_flags, True
+
+    l, w = int(room_l), int(room_w)
+    selection.clear()
+    for cat in list(resolved):
+        dropped.append({"category": cat, "item": None,
+                        "reason": "could not fit in the room"})
+    empty_fit = tools.fit_check([], room_l, room_w, trace=trace, circulation_factor=circ)
+    extra_flags.append(
+        f"Selected pieces do not fit the room entered as {l}cm × {w}cm. "
+        f"Please confirm your dimensions or reduce the must-have list."
+    )
+    return selection, empty_fit, extra_flags, False
+
+
 # --- Main entry point -----------------------------------------------------
 
 def run(brief_input: dict[str, Any], feedback: str | None = None) -> dict[str, Any]:
@@ -933,6 +1069,31 @@ def run(brief_input: dict[str, Any], feedback: str | None = None) -> dict[str, A
         flags.append(f"Revised per your feedback: \"{fb}\"")
 
     intent = parse_brief(brief_input)
+
+    # BUG B: flag conflicting dimensions in free text vs structured fields.
+    dim_check = guardrails.detect_dimension_conflict(
+        intent.get("length_cm"), intent.get("width_cm"),
+        intent.get("free_text", ""), intent.get("constraints", ""),
+    )
+    if dim_check.get("conflict"):
+        flags.append(dim_check["message"])
+    if dim_check.get("severe"):
+        return {
+            "status": "clarify",
+            "room_type": "Living Room",
+            "style": intent.get("style_preference"),
+            "budget": intent.get("budget_inr"),
+            "items": [],
+            "flags": flags,
+            "messages": [dim_check["message"]],
+            "rationale": "",
+            "trade_offs": "",
+            "dropped": [],
+            "tool_trace": trace,
+            "intent": intent,
+            "possible": False,
+            "fit_severity": None,
+        }
 
     # Guardrail: this MVP only supports Living Room. Detect any other requested
     # room type BEFORE any catalog/budget/fit tool call and stop honestly.
@@ -1045,6 +1206,9 @@ def run(brief_input: dict[str, Any], feedback: str | None = None) -> dict[str, A
     # Step 3: build the proposed plan.
     dropped: list = []
     selection: dict[str, dict] = {}
+    catalog_pins = guardrails.resolve_catalog_pins(
+        must_haves, intent.get("free_text", ""), intent.get("constraints", "")
+    )
     if generous:
         selection = select_items(candidates, style, generous=True, intent=intent)
     else:
@@ -1062,6 +1226,9 @@ def run(brief_input: dict[str, Any], feedback: str | None = None) -> dict[str, A
             if cat not in selection and candidates.get(cat):
                 selection[cat] = candidates[cat][0]
 
+    # BUG C: honour named catalog pieces (e.g. Eames lounger -> ACH-001).
+    pinned_cats = apply_catalog_pins(selection, catalog_pins, resolved, flags)
+
     # Categories with no catalog item at all -> record as unfulfillable.
     for cat in resolved:
         if cat not in selection:
@@ -1071,11 +1238,12 @@ def run(brief_input: dict[str, Any], feedback: str | None = None) -> dict[str, A
     # Step 4: deterministic guardrail gate -> repair budget & fit (swap-on-fail).
     for _ in range(MAX_REPAIR_ROUNDS):
         changed = repair_budget(selection, candidates, intent.get("budget_inr"),
-                                trace, dropped)
+                                trace, dropped, pinned_cats=pinned_cats)
         changed = repair_fit(selection, candidates, intent.get("length_cm"),
                              intent.get("width_cm"), trace, dropped,
                              generous=generous,
-                             style=intent.get("style_preference", "")) or changed
+                             style=intent.get("style_preference", ""),
+                             pinned_cats=pinned_cats) or changed
         if not changed:
             break
 
@@ -1094,12 +1262,24 @@ def run(brief_input: dict[str, Any], feedback: str | None = None) -> dict[str, A
                               intent.get("length_cm"), intent.get("width_cm"), trace,
                               intent=intent, target_pct=target)
 
+    # Step 6: BUG A — hard fit gate (code veto; never show severe failure as success).
+    selection, fit_result, fit_flags, possible = enforce_fit_final_gate(
+        selection, candidates, resolved, intent, dropped, trace, generous,
+        intent.get("budget_inr"),
+    )
+    flags.extend(fit_flags)
+    fit_severity = guardrails.classify_fit_severity(fit_result)
+
     final_ids = [it["item_id"] for it in selection.values()]
-    circ = _circulation_factor(intent.get("length_cm"), intent.get("width_cm"), generous)
     budget_result = tools.budget_calculator(final_ids, intent.get("budget_inr"), trace=trace)
-    fit_result = tools.fit_check(final_ids, intent.get("length_cm"),
-                                 intent.get("width_cm"), trace=trace,
-                                 circulation_factor=circ)
+
+    # Budget hard gate — same class of bug as fit: do not present overrun as success.
+    if budget_result.get("over_budget"):
+        possible = False
+        flags.append(
+            f"Plan total Rs {int(budget_result['total']):,} exceeds your "
+            f"Rs {int(intent.get('budget_inr') or 0):,} budget — not a finalized plan."
+        )
 
     # Per-item flags: out-of-stock, null price, null dimensions.
     items: list[dict] = []
@@ -1138,7 +1318,7 @@ def run(brief_input: dict[str, Any], feedback: str | None = None) -> dict[str, A
     budget = intent.get("budget_inr")
     min_full_cost = _min_full_cost(candidates, resolved)
     shortfall_note = None
-    if budget is not None and min_full_cost is not None and min_full_cost > budget:
+    if budget is not None and min_full_cost is not None and min_full_cost > budget and possible:
         shortfall_note = (
             f"The full must-have list needs at least Rs {int(min_full_cost):,}, "
             f"which is Rs {int(min_full_cost - budget):,} over your Rs {int(budget):,} "
@@ -1148,10 +1328,25 @@ def run(brief_input: dict[str, Any], feedback: str | None = None) -> dict[str, A
 
     if not items:
         status = "impossible"
-    elif dropped or shortfall_note or not fit_result.get("fits", True):
+    elif not possible or fit_severity == "severe":
+        status = "impossible"
+    elif (not fit_result.get("fits", True) or fit_severity == "failed"
+          or budget_result.get("over_budget")):
+        status = "partial"
+    elif dropped or shortfall_note:
         status = "partial"
     else:
         status = "ok"
+
+    # Dedupe dropped categories for cleaner trade-off / flag text.
+    seen_drop: set[tuple] = set()
+    unique_dropped: list = []
+    for d in dropped:
+        key = (d.get("category"), d.get("reason"))
+        if key not in seen_drop:
+            seen_drop.add(key)
+            unique_dropped.append(d)
+    dropped = unique_dropped
 
     # Honesty: the "left out" list combines dropped categories AND requested
     # must-haves that had no catalog match, so trade-off text can never falsely
@@ -1183,6 +1378,8 @@ def run(brief_input: dict[str, Any], feedback: str | None = None) -> dict[str, A
         "items": items,
         "budget_result": budget_result,
         "fit_result": fit_result,
+        "fit_severity": fit_severity,
+        "possible": possible and status == "ok",
         "rationale": rationale,
         "trade_offs": trade_offs,
         "flags": flags,

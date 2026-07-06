@@ -91,6 +91,7 @@ st.markdown(
                font-size: .9rem; }
       .badge-ok { background: #E4F1E4; color: #1f7a32; }
       .badge-warn { background: #FBE7E2; color: #B5401C; }
+      .badge-fail { background: #F8D7DA; color: #8B1A1A; font-weight: 700; }
 
       .rationale-box { background: #F4EFE7; border-left: 4px solid #B5613C;
                        padding: 14px 18px; border-radius: 8px; color: #3a342d;
@@ -267,12 +268,24 @@ def _render_budget_bar(plan: dict) -> None:
 def _render_fit_badge(plan: dict) -> None:
     fit = plan.get("fit_result", {})
     pct = fit.get("footprint_used_pct")
-    if pct is None:
+    severity = plan.get("fit_severity") or (
+        "severe" if pct and pct > 100 and not fit.get("fits")
+        else "failed" if not fit.get("fits") else "ok"
+    )
+    if pct is None and severity == "ok":
         return
     st.markdown('<div class="label">Room fit</div>', unsafe_allow_html=True)
-    if fit.get("fits"):
+    if severity == "ok" or (fit.get("fits") and (pct or 0) <= 85):
         st.markdown(
             f'<span class="badge badge-ok">✓ Fits — footprint uses ~{pct:.0f}% '
+            f'of the floor</span>', unsafe_allow_html=True)
+    elif severity == "severe" or (pct and pct > 100):
+        st.markdown(
+            f'<span class="badge badge-fail">✗ Doesn\'t fit — needs ~{pct:.0f}% '
+            f'of the floor (room is far too small)</span>', unsafe_allow_html=True)
+    elif not fit.get("fits"):
+        st.markdown(
+            f'<span class="badge badge-fail">✗ Doesn\'t fit — footprint ~{pct:.0f}% '
             f'of the floor</span>', unsafe_allow_html=True)
     else:
         st.markdown(
@@ -369,13 +382,16 @@ def render_plan(plan: dict, title_suffix: str = "") -> None:
                     unsafe_allow_html=True)
 
     if status == "impossible":
-        st.error("A full plan isn't possible from the catalog for this brief. See notes below.")
+        st.error("A full plan isn't possible for this brief. See notes below.")
+        if plan.get("possible") is False:
+            st.warning("This room cannot accommodate the requested furniture set as entered.")
     elif status == "partial":
         st.warning("Here is the closest realistic option — not everything could be included.")
 
     _render_items(plan)
-    _render_budget_bar(plan)
-    _render_fit_badge(plan)
+    if plan.get("items"):
+        _render_budget_bar(plan)
+        _render_fit_badge(plan)
     st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
     _render_rationale(plan)
     _render_flags(plan)
