@@ -58,16 +58,29 @@ def db_exists() -> bool:
 
 def get_connection() -> sqlite3.Connection:
     """Open a read-only connection. Raises a friendly error if the file is missing."""
-    path = db_path()
+    path = os.path.abspath(db_path())
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"Could not find '{DB_FILENAME}'. Place the provided database file in "
             f"the project root: {os.path.dirname(path)}"
         )
     # Read-only URI connection so we can never accidentally mutate the given data.
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    # Try multiple URI forms — Streamlit Cloud (Linux) can reject the plain form.
+    uri_forms = [
+        f"file:{path}?mode=ro",
+        f"file:///{path.replace(os.sep, '/')}?mode=ro",
+    ]
+    last_err: Exception | None = None
+    for uri in uri_forms:
+        try:
+            conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            return conn
+        except sqlite3.OperationalError as exc:
+            last_err = exc
+    raise sqlite3.OperationalError(
+        f"Could not open read-only database at {path}: {last_err}"
+    )
 
 
 def query(sql: str, params: tuple | list = ()) -> list[dict[str, Any]]:

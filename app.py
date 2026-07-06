@@ -7,7 +7,11 @@ import os
 import streamlit as st
 
 # Must be the first Streamlit command (Cloud shows a blank page if this runs late).
-st.set_page_config(page_title="AI Interior Design Agent", page_icon="🛋️", layout="centered")
+st.set_page_config(page_title="AI Interior Design Agent", layout="centered")
+
+# Render visible content immediately so Cloud never shows a blank shell.
+st.title("AI Interior Design Agent")
+st.caption("Real catalog items only · budget-aware · room-fit checked · honest trade-offs")
 
 # Streamlit Cloud secrets → env vars (keys stay out of git).
 try:
@@ -17,8 +21,13 @@ try:
 except Exception:
     pass
 
-import db
-import llm
+try:
+    import db
+    import llm
+except Exception as exc:
+    st.error("Failed to load application modules.")
+    st.exception(exc)
+    st.stop()
 
 STYLE_OPTIONS = [
     "Scandinavian", "Mid-Century", "Industrial", "Contemporary",
@@ -97,13 +106,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("🛋️ AI Interior Design Agent")
-st.markdown(
-    '<div class="hero-sub">Real catalog items only · budget-aware · room-fit checked '
-    '· honest about trade-offs</div>',
-    unsafe_allow_html=True,
-)
-
 
 def _inr(value) -> str:
     if value is None:
@@ -130,7 +132,11 @@ try:
         for p in schema["problems"]:
             st.write("- ", p)
 
-    if not llm.is_available():
+    try:
+        llm_ok = llm.is_available()
+    except Exception:
+        llm_ok = False
+    if not llm_ok:
         st.info(
             "Gemini API key not detected — running on the deterministic fallback "
             "(rule-based planning and rationale). Add `GEMINI_API_KEY` to Streamlit "
