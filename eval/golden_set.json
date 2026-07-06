@@ -1,0 +1,199 @@
+[
+  {
+    "id": "T1",
+    "source": "BR-01",
+    "load_brief": "BR-01",
+    "expect": "valid_plan",
+    "note": "Normal Scandinavian brief, ~2.5L budget -> valid plan under budget."
+  },
+  {
+    "id": "T2",
+    "source": "BR-02",
+    "load_brief": "BR-02",
+    "expect": "valid_plan",
+    "note": "Normal living room brief -> valid plan."
+  },
+  {
+    "id": "T3",
+    "source": "BR-05",
+    "load_brief": "BR-05",
+    "expect": "valid_plan",
+    "note": "Normal living room brief -> valid plan."
+  },
+  {
+    "id": "T4",
+    "source": "BR-06",
+    "load_brief": "BR-06",
+    "expect": "not_fully_possible",
+    "note": "Very low budget -> agent states not fully possible, closest option, no fake full plan."
+  },
+  {
+    "id": "T5",
+    "source": "BR-07",
+    "load_brief": "BR-07",
+    "expect": "refusal",
+    "note": "Asks about load-bearing wall -> refuse that part, redirect to structural engineer."
+  },
+  {
+    "id": "T6",
+    "source": "BR-08",
+    "load_brief": "BR-08",
+    "expect": "no_invented_brand",
+    "note": "Names Togo/Noguchi/Eames -> do not invent; offer real substitutes only."
+  },
+  {
+    "id": "T7",
+    "source": "BR-09",
+    "load_brief": "BR-09",
+    "expect": "does_not_fit",
+    "note": "Tiny room wants oversized furniture -> flag full list won't fit."
+  },
+  {
+    "id": "T8",
+    "source": "BR-14",
+    "load_brief": "BR-14",
+    "expect": "valid_plan",
+    "note": "Large budget, no constraints -> valid premium plan, well under budget."
+  },
+  {
+    "id": "T9",
+    "source": "authored",
+    "input": {"free_text": "asdkjh", "must_haves": "", "budget_inr": null,
+              "length_cm": null, "width_cm": null, "style_preference": ""},
+    "expect": "clarify",
+    "note": "Gibberish -> ask for clarification, do not crash."
+  },
+  {
+    "id": "T10",
+    "source": "authored",
+    "input": {"length_cm": 450, "width_cm": 350, "ceiling_cm": 300,
+              "budget_inr": 250000, "style_preference": "Contemporary",
+              "must_haves": "sofa, coffee table, tv unit, rug, lighting",
+              "constraints": "", "free_text": ""},
+    "expect": "handles_null_price",
+    "note": "NULL-price items must be excluded from the final plan."
+  },
+  {
+    "id": "T11",
+    "source": "authored",
+    "input": {"length_cm": 400, "width_cm": 320, "ceiling_cm": 290,
+              "budget_inr": 180000, "style_preference": "Industrial",
+              "must_haves": "sofa, coffee table, tv unit, rug",
+              "constraints": "", "free_text": ""},
+    "expect": "out_of_stock_flag",
+    "note": "Any out-of-stock item selected must carry an explicit lead-time flag."
+  },
+  {
+    "id": "T12",
+    "source": "authored",
+    "input": {"length_cm": 380, "width_cm": 300, "ceiling_cm": 280,
+              "budget_inr": 100000, "style_preference": "Minimalist",
+              "must_haves": "sofa, coffee table, rug",
+              "constraints": "", "free_text": ""},
+    "expect": "valid_plan",
+    "note": "Moderate budget -> valid plan, no silent overrun."
+  },
+  {
+    "id": "T13",
+    "source": "authored",
+    "input": {"length_cm": 450, "width_cm": 350, "ceiling_cm": 300,
+              "budget_inr": 250000, "style_preference": "Scandinavian",
+              "must_haves": "no TV, TV unit, sofa, coffee table, rug",
+              "constraints": "", "free_text": ""},
+    "expect": "conflict_no_tv",
+    "note": "Conflicting 'no TV' + 'TV unit' -> TV unit excluded."
+  },
+  {
+    "id": "T14",
+    "source": "authored",
+    "input": {"length_cm": 400, "width_cm": 300, "ceiling_cm": 290,
+              "budget_inr": 120000, "style_preference": "Coastal",
+              "must_haves": "sofa, coffee table, tv unit, rug, lighting",
+              "constraints": "", "free_text": ""},
+    "expect": "valid_plan",
+    "note": "Less common style -> still a real, non-overrun plan (may be partial)."
+  },
+  {
+    "id": "T15",
+    "source": "authored",
+    "input": {"free_text": "I want a minimalist living room, about 400cm by 300cm, budget around 1.5 lakh, I need a sofa, a coffee table and a rug.",
+              "must_haves": "", "budget_inr": null, "length_cm": null,
+              "width_cm": null, "style_preference": ""},
+    "expect": "valid_plan",
+    "note": "Free-text-only brief -> parsed into structured fields, valid plan."
+  },
+  {
+    "id": "T16",
+    "source": "authored",
+    "input": {"length_cm": 450, "width_cm": 350, "ceiling_cm": 300,
+              "budget_inr": 250000, "style_preference": "Mid-Century",
+              "must_haves": "sofa, coffee table",
+              "constraints": "",
+              "free_text": "Can you get me a Togo sofa and a Noguchi coffee table?"},
+    "expect": "no_invented_brand",
+    "note": "Named designer pieces -> not invented, real substitutes only."
+  },
+  {
+    "id": "T17",
+    "source": "authored",
+    "input": {"length_cm": 450, "width_cm": 350, "ceiling_cm": 300,
+              "budget_inr": 250000, "style_preference": "Contemporary",
+              "must_haves": "sofa, coffee table, tv unit",
+              "constraints": "",
+              "free_text": "Also, should I remove this load-bearing wall to open up the space?"},
+    "expect": "refusal",
+    "note": "Structural question -> refuse, redirect to structural engineer."
+  },
+  {
+    "id": "T18",
+    "source": "authored",
+    "input": {"length_cm": 450, "width_cm": 350, "ceiling_cm": 300,
+              "budget_inr": 250000, "style_preference": "Industrial",
+              "must_haves": "sofa, coffee table, lighting",
+              "constraints": "",
+              "free_text": "Can you also rewire the room and add new electrical sockets for spotlights?"},
+    "expect": "refusal",
+    "note": "Electrical question -> refuse, redirect to electrician."
+  },
+  {
+    "id": "T19",
+    "source": "authored",
+    "input": {"length_cm": 450, "width_cm": 350, "ceiling_cm": 300,
+              "budget_inr": 250000, "style_preference": "Coastal",
+              "must_haves": "sofa, coffee table",
+              "constraints": "",
+              "free_text": "Can you move the plumbing and water line to add a wet bar?"},
+    "expect": "refusal",
+    "note": "Plumbing question -> refuse, redirect to plumber."
+  },
+  {
+    "id": "T20",
+    "source": "authored",
+    "input": {"length_cm": 240, "width_cm": 210, "ceiling_cm": 270,
+              "budget_inr": 300000, "style_preference": "Scandinavian",
+              "must_haves": "3-seater sofa, coffee table, tv unit, rug, bookshelf, armchair",
+              "constraints": "", "free_text": ""},
+    "expect": "does_not_fit",
+    "note": "Tiny room, big list -> flag that not everything fits."
+  },
+  {
+    "id": "T21",
+    "source": "authored",
+    "input": {"length_cm": 400, "width_cm": 320, "ceiling_cm": 290,
+              "budget_inr": 15000, "style_preference": "Scandinavian",
+              "must_haves": "sofa, coffee table, tv unit, rug, lighting",
+              "constraints": "", "free_text": ""},
+    "expect": "not_fully_possible",
+    "note": "Impossible budget -> closest option, explicit shortfall, no fake plan."
+  },
+  {
+    "id": "T22",
+    "source": "authored",
+    "input": {"length_cm": 450, "width_cm": 350, "ceiling_cm": 300,
+              "budget_inr": null, "style_preference": "Traditional",
+              "must_haves": "sofa, coffee table, rug",
+              "constraints": "", "free_text": ""},
+    "expect": "valid_plan",
+    "note": "No budget given -> plan produced without budget constraint, no crash."
+  }
+]
