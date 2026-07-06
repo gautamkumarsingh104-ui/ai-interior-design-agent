@@ -6,6 +6,9 @@ import os
 
 import streamlit as st
 
+# Must be the first Streamlit command (Cloud shows a blank page if this runs late).
+st.set_page_config(page_title="AI Interior Design Agent", page_icon="🛋️", layout="centered")
+
 # Streamlit Cloud secrets → env vars (keys stay out of git).
 try:
     for _key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_MODEL"):
@@ -14,7 +17,6 @@ try:
 except Exception:
     pass
 
-import agent
 import db
 import llm
 
@@ -38,8 +40,6 @@ MUST_HAVE_OPTIONS = [
 ]
 
 ACCENT = "#B5613C"
-
-st.set_page_config(page_title="AI Interior Design Agent", page_icon="🛋️", layout="centered")
 
 # --- Styling --------------------------------------------------------------
 
@@ -97,8 +97,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown('<div class="hero-title">🛋️ AI Interior Design Agent</div>',
-            unsafe_allow_html=True)
+st.title("🛋️ AI Interior Design Agent")
 st.markdown(
     '<div class="hero-sub">Real catalog items only · budget-aware · room-fit checked '
     '· honest about trade-offs</div>',
@@ -117,30 +116,32 @@ def _inr(value) -> str:
 
 # --- Preflight checks -----------------------------------------------------
 
-if not db.db_exists():
-    st.error(
-        f"Database file `{db.DB_FILENAME}` not found. Place the provided file in "
-        f"the project root and reload."
-    )
+try:
+    if not db.db_exists():
+        st.error(
+            f"Database file `{db.DB_FILENAME}` not found. Place the provided file in "
+            f"the project root and reload."
+        )
+        st.stop()
+
+    schema = db.verify_schema()
+    if not schema["ok"]:
+        st.warning("The database schema looks different from expected:")
+        for p in schema["problems"]:
+            st.write("- ", p)
+
+    if not llm.is_available():
+        st.info(
+            "Gemini API key not detected — running on the deterministic fallback "
+            "(rule-based planning and rationale). Add `GEMINI_API_KEY` to Streamlit "
+            "Secrets or a local `.env` file for full LLM features."
+        )
+
+    briefs = db.get_living_room_briefs()
+except Exception as exc:
+    st.error("The app failed to start. Check Streamlit Cloud logs for details.")
+    st.exception(exc)
     st.stop()
-
-schema = db.verify_schema()
-if not schema["ok"]:
-    st.warning("The database schema looks different from expected:")
-    for p in schema["problems"]:
-        st.write("- ", p)
-
-if not llm.is_available():
-    st.info(
-        "Gemini API key not detected — running on the deterministic fallback "
-        "(rule-based planning and rationale). Add `GEMINI_API_KEY` to `.env` for full "
-        "LLM parsing, orchestration and rationale."
-    )
-
-
-# --- Sample brief loader (secondary / optional shortcut) ------------------
-
-briefs = db.get_living_room_briefs()
 brief_by_id = {b["brief_id"]: b for b in briefs}
 
 with st.sidebar:
@@ -412,6 +413,7 @@ if submitted:
     st.session_state.plan_v2 = None
     with st.spinner("Designing your room..."):
         try:
+            import agent
             st.session_state.plan_v1 = agent.run(st.session_state.brief_input)
         except Exception as exc:
             st.exception(exc)
@@ -434,6 +436,7 @@ if st.session_state.plan_v1:
         if refine_clicked and refine_text.strip():
             with st.spinner("Refining your plan..."):
                 try:
+                    import agent
                     st.session_state.plan_v2 = agent.run(
                         st.session_state.brief_input, feedback=refine_text.strip()
                     )
