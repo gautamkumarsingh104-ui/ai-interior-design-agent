@@ -2,8 +2,17 @@
 from __future__ import annotations
 
 import html
+import os
 
 import streamlit as st
+
+# Streamlit Cloud secrets → env vars (keys stay out of git).
+try:
+    for _key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_MODEL"):
+        if _key in st.secrets and not os.environ.get(_key):
+            os.environ[_key] = str(st.secrets[_key])
+except Exception:
+    pass
 
 import agent
 import db

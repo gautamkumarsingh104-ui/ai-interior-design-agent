@@ -53,6 +53,23 @@ Results are printed as a pass/fail table and written to `eval/results/results.cs
 
 ---
 
+## Deploy to Streamlit Cloud (auto-updates on every push)
+
+1. **Push this repo to GitHub** (already set up if you followed the setup above).
+2. Go to [share.streamlit.io](https://share.streamlit.io) → **Create app** → connect your GitHub account.
+3. Pick this repository, branch **`main`**, main file **`app.py`**.
+4. Under **Advanced settings → Secrets**, paste the contents of
+   `.streamlit/secrets.toml.example` and replace with your real `GEMINI_API_KEY`.
+5. Click **Deploy**.
+
+After that, **every `git push` to `main` automatically redeploys** the live app.
+Your API key lives only in Streamlit Secrets and local `.env` — both are gitignored.
+
+**Never commit:** `.env`, `.streamlit/secrets.toml`, or any file containing API keys.
+Use `.env.example` and `.streamlit/secrets.toml.example` as templates only.
+
+---
+
 ## How it works (agentic, multi-step)
 
 ```
